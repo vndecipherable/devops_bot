@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  db:
+    build: ./db
+    container_name: postgres_primary
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: task_bot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - bot_network
+    restart: unless-stopped
+
+  db_repl:
+    build: ./db_repl
+    container_name: postgres_replica
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: task_bot
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_repl_data:/var/lib/postgresql/data
+    networks:
+      - bot_network
+    restart: unless-stopped
+
+  bot:
+    build: ./bot
+    container_name: telegram_bot
+    env_file:
+      - .env
+    depends_on:
+      - db
+    networks:
+      - bot_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  postgres_repl_data:
+
+networks:
+  bot_network:
+    driver: bridge
