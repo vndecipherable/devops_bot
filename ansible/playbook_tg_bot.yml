@@ -1,0 +1,160 @@
+---
+- name: Deploy PostgreSQL Primary
+  hosts: db_primary
+  become: yes
+  vars:
+    db_password: "postgres"
+    replica_password: "replica_pass"
+  tasks:
+    - name: Install PostgreSQL
+      apt:
+        name: postgresql
+        state: present
+        update_cache: yes
+
+    - name: Ensure PostgreSQL is running
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Create database task_bot
+      postgresql_db:
+        name: task_bot
+      become_user: postgres
+
+    - name: Create user for bot
+      postgresql_user:
+        db: task_bot
+        name: task_bot_user
+        password: "{{ db_password }}"
+        priv: ALL
+      become_user: postgres
+
+    - name: Create replication user
+      postgresql_user:
+        name: replicator
+        password: "{{ replica_password }}"
+        role_attr_flags: REPLICATION
+      become_user: postgres
+
+    - name: Copy pg_hba.conf
+      copy:
+        src: pg_hba.conf
+        dest: /etc/postgresql/17/main/pg_hba.conf
+        owner: postgres
+        group: postgres
+        mode: 0640
+      notify: restart postgresql
+
+    - name: Copy postgresql.conf
+      copy:
+        src: config-postgresql/postgresql.conf
+        dest: /etc/postgresql/17/main/postgresql.conf
+        owner: postgres
+        group: postgres
+        mode: 0644
+      notify: restart postgresql
+
+  handlers:
+    - name: restart postgresql
+      service:
+        name: postgresql
+        state: restarted
+
+- name: Deploy PostgreSQL Replica
+  hosts: db_replica
+  become: yes
+  vars:
+    replica_password: "replica_pass"
+  tasks:
+    - name: Install PostgreSQL
+      apt:
+        name: postgresql
+        state: present
+        update_cache: yes
+
+    - name: Stop PostgreSQL
+      service:
+        name: postgresql
+        state: stopped
+
+    - name: Remove old data directory
+      file:
+        path: /var/lib/postgresql/17/main
+        state: absent
+
+    - name: Create data directory
+      file:
+        path: /var/lib/postgresql/17/main
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: 0700
+
+    - name: Copy pgpass file
+      copy:
+        src: pgpass
+        dest: /var/lib/postgresql/.pgpass
+        owner: postgres
+        group: postgres
+        mode: 0600
+
+    - name: Take base backup from primary
+      command: >
+        pg_basebackup -h {{ hostvars['db1']['ansible_host'] }}
+        -U replicator -D /var/lib/postgresql/17/main
+        -Fp -Xs -P -R
+      become_user: postgres
+
+    - name: Start PostgreSQL replica
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+- name: Deploy Telegram Bot
+  hosts: bot
+  become: yes
+  vars:
+    bot_token: "ваш_токен_бота"
+    db_password: "postgres"
+  tasks:
+    - name: Install required packages
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+          - mc
+        state: present
+        update_cache: yes
+
+    - name: Clone repository from GitHub
+      git:
+        repo: https://github.com/vndecipherable/devops_bot.git
+        dest: /opt/devops_bot
+        branch: docker
+
+    - name: Install Python requirements
+      pip:
+        requirements: /opt/devops_bot/bot/requirements.txt
+
+    - name: Create .env file for bot
+      copy:
+        dest: /opt/devops_bot/bot/.env
+        content: |
+          BOT_TOKEN={{ bot_token }}
+          DB_NAME=task_bot
+          DB_USER=task_bot_user
+          DB_PASSWORD={{ db_password }}
+          DB_HOST={{ hostvars['db1']['ansible_host'] }}
+          DB_PORT=5432
+          LOG_PATH=/var/log/postgresql/postgresql-17-main.log
+          MASTER_IP={{ hostvars['db1']['ansible_host'] }}
+
+    - name: Start bot in background
+      shell:
+        cmd: nohup python3 /opt/devops_bot/bot/bot.py > /var/log/bot.log 2>&1 &
+        chdir: /opt/devops_bot/bot
