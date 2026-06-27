@@ -19,16 +19,10 @@
 
     - name: Create user for bot
       postgresql_user:
-        name: task_bot_user
+        name: postgres
         password: "{{ db_password }}"
         role_attr_flags: LOGIN
         state: present
-      become_user: postgres
-
-    - name: Grant privileges to bot user
-      postgresql_query:
-        db: task_bot
-        query: GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO task_bot_user
       become_user: postgres
 
     - name: Create replication user
@@ -37,6 +31,24 @@
         password: "{{ replica_password }}"
         role_attr_flags: REPLICATION,LOGIN
         state: present
+      become_user: postgres
+
+    - name: Create tables for bot
+      postgresql_query:
+        db: task_bot
+        query: |
+          CREATE TABLE IF NOT EXISTS emails (
+              id SERIAL PRIMARY KEY,
+              email VARCHAR(255) NOT NULL UNIQUE,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE TABLE IF NOT EXISTS phones (
+              id SERIAL PRIMARY KEY,
+              phone VARCHAR(50) NOT NULL UNIQUE,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO task_bot_user;
+          GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO task_bot_user;
       become_user: postgres
 
 - name: Deploy PostgreSQL Replica
@@ -131,7 +143,7 @@
         content: |
           BOT_TOKEN={{ bot_token }}
           DB_NAME=task_bot
-          DB_USER=task_bot_user
+          DB_USER=postgres
           DB_PASSWORD={{ db_password }}
           DB_HOST={{ hostvars['db1']['ansible_host'] }}
           DB_PORT=5432
@@ -143,5 +155,5 @@
         cmd: |
           cd /opt/devops_bot/bot
           source /opt/devops_bot/venv/bin/activate
-          nohup python3 bot.py > /var/log/bot.log 2>&1 &
+          nohup python3 bot.py > /tmp/bot.log 2>&1 &
         executable: /bin/bash

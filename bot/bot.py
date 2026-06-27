@@ -9,7 +9,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -251,28 +251,30 @@ async def process_text_for_extraction(message: Message, state: FSMContext):
     
     if data_type == 'email':
         found_items = extract_emails_from_text(text)
-        item_name = "email-адрес"
         save_func = save_email_to_db
         type_label = "email"
     else:
         found_items = extract_phones_from_text(text)
-        item_name = "номер телефона"
         save_func = save_phone_to_db
         type_label = "телефон"
     
     if not found_items:
         await message.answer(
-            f"❌ В указанном тексте не найдено ни одного {item_name}.\n\n"
+            f"❌ В указанном тексте не найдено ни одного {type_label}.\n\n"
             f"Попробуйте снова с помощью команд /add_email или /add_phone."
         )
         await state.clear()
         return
     
-    await state.update_data(found_items=found_items, save_func=save_func, type_label=type_label)
+    # Сохраняем данные в состоянии
+    await state.update_data(
+        found_items=found_items,
+        save_func=save_func,
+        type_label=type_label,
+        data_type=data_type
+    )
     
     items_list = "\n".join([f"• {item}" for item in found_items])
-    
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -293,6 +295,15 @@ async def handle_save_callback(callback: types.CallbackQuery, state: FSMContext)
     """Обработка выбора: сохранить или отменить"""
     data = await state.get_data()
     
+    # Проверка, что данные есть
+    if not data or 'found_items' not in data:
+        await callback.message.edit_text(
+            "❌ Данные не найдены. Попробуйте снова через /add_email или /add_phone."
+        )
+        await state.clear()
+        await callback.answer()
+        return
+    
     if callback.data == "save_yes":
         found_items = data.get('found_items', [])
         save_func = data.get('save_func')
@@ -302,11 +313,12 @@ async def handle_save_callback(callback: types.CallbackQuery, state: FSMContext)
         exists_count = 0
         
         for item in found_items:
-            success = await save_func(item)
-            if success:
-                saved_count += 1
-            else:
-                exists_count += 1
+            if save_func:
+                success = await save_func(item)
+                if success:
+                    saved_count += 1
+                else:
+                    exists_count += 1
         
         await callback.message.edit_text(
             f"✅ Результат сохранения:\n\n"
