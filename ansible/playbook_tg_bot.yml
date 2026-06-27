@@ -3,15 +3,9 @@
   hosts: db_primary
   become: yes
   vars:
-    db_password: "postgres"
-    replica_password: "replica_pass"
+    db_password: "123"
+    replica_password: "123"
   tasks:
-    - name: Install PostgreSQL
-      apt:
-        name: postgresql
-        state: present
-        update_cache: yes
-
     - name: Ensure PostgreSQL is running
       service:
         name: postgresql
@@ -25,49 +19,37 @@
 
     - name: Create user for bot
       postgresql_user:
-        db: task_bot
         name: task_bot_user
         password: "{{ db_password }}"
-        priv: ALL
+        role_attr_flags: LOGIN
+        state: present
+      become_user: postgres
+
+    - name: Grant privileges to bot user
+      postgresql_query:
+        db: task_bot
+        query: GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO task_bot_user
       become_user: postgres
 
     - name: Create replication user
       postgresql_user:
         name: replicator
         password: "{{ replica_password }}"
-        role_attr_flags: REPLICATION
+        role_attr_flags: REPLICATION,LOGIN
+        state: present
       become_user: postgres
-
-    - name: Copy pg_hba.conf
-      copy:
-        src: pg_hba.conf
-        dest: /etc/postgresql/17/main/pg_hba.conf
-        owner: postgres
-        group: postgres
-        mode: 0640
-      notify: restart postgresql
-
-    - name: Copy postgresql.conf
-      copy:
-        src: config-postgresql/postgresql.conf
-        dest: /etc/postgresql/17/main/postgresql.conf
-        owner: postgres
-        group: postgres
-        mode: 0644
-      notify: restart postgresql
-
-  handlers:
-    - name: restart postgresql
-      service:
-        name: postgresql
-        state: restarted
 
 - name: Deploy PostgreSQL Replica
   hosts: db_replica
   become: yes
   vars:
-    replica_password: "replica_pass"
+    replica_password: "123"
   tasks:
+    - name: Install Python psycopg2 for PostgreSQL
+      apt:
+        name: python3-psycopg2
+        state: present
+
     - name: Install PostgreSQL
       apt:
         name: postgresql
@@ -117,8 +99,8 @@
   hosts: bot
   become: yes
   vars:
-    bot_token: "ваш_токен_бота"
-    db_password: "postgres"
+    bot_token: "8958995483:AAETDy1MKE9E9F-V1aPCooP9Hgtlj9QcZSY"
+    db_password: "123"
   tasks:
     - name: Install required packages
       apt:
@@ -135,11 +117,13 @@
       git:
         repo: https://github.com/vndecipherable/devops_bot.git
         dest: /opt/devops_bot
-        branch: docker
+        version: docker
 
-    - name: Install Python requirements
+    - name: Install Python requirements in virtual environment
       pip:
         requirements: /opt/devops_bot/bot/requirements.txt
+        virtualenv: /opt/devops_bot/venv
+        virtualenv_command: python3 -m venv
 
     - name: Create .env file for bot
       copy:
@@ -154,7 +138,10 @@
           LOG_PATH=/var/log/postgresql/postgresql-17-main.log
           MASTER_IP={{ hostvars['db1']['ansible_host'] }}
 
-    - name: Start bot in background
+    - name: Start bot in background with virtual environment
       shell:
-        cmd: nohup python3 /opt/devops_bot/bot/bot.py > /var/log/bot.log 2>&1 &
-        chdir: /opt/devops_bot/bot
+        cmd: |
+          cd /opt/devops_bot/bot
+          source /opt/devops_bot/venv/bin/activate
+          nohup python3 bot.py > /var/log/bot.log 2>&1 &
+        executable: /bin/bash
